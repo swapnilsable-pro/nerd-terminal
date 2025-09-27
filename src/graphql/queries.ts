@@ -26,7 +26,7 @@ export const GET_QUEUE = gql`
 
 // Mutation to queue a song
 export const QUEUE_SONG = gql`
-  mutation QueueSong($songId: ID!) {
+  mutation QueueSong($songId: String!) {
     queueSong(songId: $songId) {
       songId
       position
@@ -38,7 +38,7 @@ export const QUEUE_SONG = gql`
 
 // Mutation to upvote a song
 export const UPVOTE_SONG = gql`
-  mutation UpvoteSong($songId: ID!) {
+  mutation UpvoteSong($songId: String!) {
     upvoteSong(songId: $songId) {
       songId
       position
@@ -49,11 +49,29 @@ export const UPVOTE_SONG = gql`
 
 // Mutation to downvote a song
 export const DOWNVOTE_SONG = gql`
-  mutation DownvoteSong($songId: ID!) {
+  mutation DownvoteSong($songId: String!) {
     downvoteSong(songId: $songId) {
       songId
       position
       votes
+    }
+  }
+`;
+
+// Subscription for real-time queue updates
+export const QUEUE_UPDATED_SUBSCRIPTION = gql`
+  subscription QueueUpdated {
+    queueUpdated {
+      type
+      songId
+      user
+      timestamp
+      queue {
+        songId
+        position
+        votes
+        queuedAt
+      }
     }
   }
 `;

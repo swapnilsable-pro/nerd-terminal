@@ -44,3 +44,16 @@ export interface UpvoteSongVariables {
 export interface DownvoteSongVariables {
   songId: string;
 }
+
+// Subscription Types
+export interface QueueUpdateEvent {
+  type: string;
+  queue: QueueItem[];
+  timestamp: string;
+  user?: string;
+  songId?: string;
+}
+
+export interface QueueUpdatedSubscription {
+  queueUpdated: QueueUpdateEvent;
+}

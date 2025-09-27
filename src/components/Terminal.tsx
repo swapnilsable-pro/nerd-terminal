@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
-import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_SONGS, GET_QUEUE, QUEUE_SONG, UPVOTE_SONG, DOWNVOTE_SONG } from '../graphql/queries';
+// Apollo hooks must be imported from the /react entry in this version
+import { useQuery, useMutation, useSubscription } from '@apollo/client/react';
+import { GET_SONGS, GET_QUEUE, QUEUE_SONG, UPVOTE_SONG, DOWNVOTE_SONG, QUEUE_UPDATED_SUBSCRIPTION } from '../graphql/queries';
 import { 
   Song, 
   QueueItem, 
@@ -12,7 +13,8 @@ import {
   DownvoteSongResponse,
   QueueSongVariables,
   UpvoteSongVariables,
-  DownvoteSongVariables
+  DownvoteSongVariables,
+  QueueUpdatedSubscription
 } from '../types';
 
 // Styled components for terminal look
@@ -106,12 +108,56 @@ export const Terminal: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
+  // State for live updates
+  const [isLiveMode, setIsLiveMode] = useState(false);
+  const [lastQueueUpdate, setLastQueueUpdate] = useState<string>('');
+
   // GraphQL hooks
   const { data: songsData, refetch: refetchSongs } = useQuery<GetSongsResponse>(GET_SONGS);
-  const { data: queueData, refetch: refetchQueue } = useQuery<GetQueueResponse>(GET_QUEUE);
+  const { data: queueData, refetch: refetchQueue } = useQuery<GetQueueResponse>(GET_QUEUE, {
+    pollInterval: isLiveMode ? 1000 : 0, // Poll every second when live mode is on
+  });
   const [queueSongMutation] = useMutation<QueueSongResponse, QueueSongVariables>(QUEUE_SONG);
   const [upvoteSongMutation] = useMutation<UpvoteSongResponse, UpvoteSongVariables>(UPVOTE_SONG);
   const [downvoteSongMutation] = useMutation<DownvoteSongResponse, DownvoteSongVariables>(DOWNVOTE_SONG);
+
+  // Real-time subscription for queue updates
+  const { data: subscriptionData, loading: subLoading, error: subError } = useSubscription<QueueUpdatedSubscription>(
+    QUEUE_UPDATED_SUBSCRIPTION,
+    {
+      onError: (error: Error) => {
+        console.error('❌ Subscription error:', error);
+      },
+      onData: (options) => {
+        // options has shape { client, data, error, loading, ... }
+        console.log('📥 Subscription data received:', options.data);
+      }
+    }
+  );
+
+  // Add debug logging
+  useEffect(() => {
+    console.log('🔍 Subscription status:', { 
+      loading: subLoading, 
+      error: subError?.message, 
+      data: subscriptionData 
+    });
+  }, [subLoading, subError, subscriptionData]);
+
+  // Handle subscription data changes  
+  useEffect(() => {
+    if (subscriptionData?.queueUpdated) {
+      console.log('🔔 SUBSCRIPTION RECEIVED:', subscriptionData.queueUpdated);
+      
+      const event = subscriptionData.queueUpdated;
+      addOutput(`🔔 Real-time update: ${event.type}`, 'info');
+      addOutput(`   Song: ${event.songId || 'unknown'}, User: ${event.user || 'anonymous'}`);
+      addOutput(`   Time: ${new Date(event.timestamp).toLocaleTimeString()}`);
+      addOutput('');
+      
+      refetchQueue();
+    }
+  }, [subscriptionData]);
 
   // Auto-scroll to bottom when new output is added
   useEffect(() => {
@@ -124,6 +170,28 @@ export const Terminal: React.FC = () => {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Handle live queue updates
+  useEffect(() => {
+    if (queueData && isLiveMode) {
+      const currentQueueString = JSON.stringify(queueData.queue);
+      if (lastQueueUpdate && lastQueueUpdate !== currentQueueString) {
+        addOutput('🔄 Queue updated!', 'info');
+        // Show the updated queue
+        if (queueData.queue.length > 0) {
+          queueData.queue.forEach((item: QueueItem, index: number) => {
+            const song = songsData?.songs?.find((s: Song) => s.id === item.songId);
+            const songInfo = song ? `${song.title} - ${song.artist}` : `Song ID: ${item.songId}`;
+            addOutput(`  ${item.position}. ${songInfo} (${item.votes} votes)`);
+          });
+        } else {
+          addOutput('  📭 Queue is now empty');
+        }
+        addOutput('');
+      }
+      setLastQueueUpdate(currentQueueString);
+    }
+  }, [queueData, isLiveMode, lastQueueUpdate, songsData]);
 
   const addOutput = (text: string, type?: 'error' | 'success' | 'info') => {
     setOutput(prev => [...prev, { text, type }]);
@@ -149,6 +217,9 @@ export const Terminal: React.FC = () => {
           addOutput('  queue <id>       - Add song to queue by ID');
           addOutput('  upvote <id>      - Upvote a song in queue');
           addOutput('  downvote <id>    - Downvote a song in queue');
+          addOutput('  live on          - Enable live queue updates');
+          addOutput('  live off         - Disable live queue updates');
+          addOutput('  live status      - Show live mode status');
           addOutput('  clear            - Clear terminal');
           addOutput('  whoami           - Show current user info');
           break;
@@ -258,6 +329,33 @@ export const Terminal: React.FC = () => {
           ]);
           break;
 
+        case 'live':
+          if (args.length === 0) {
+            addOutput('❌ Please specify: live on, live off, or live status', 'error');
+            break;
+          }
+          switch (args[0]) {
+            case 'on':
+              setIsLiveMode(true);
+              setLastQueueUpdate(JSON.stringify(queueData?.queue || []));
+              addOutput('🔴 Live mode ON - Queue updates will appear automatically', 'success');
+              addOutput('   Polling every 1 second for real-time updates');
+              break;
+            case 'off':
+              setIsLiveMode(false);
+              addOutput('⚫ Live mode OFF - Manual refresh required', 'info');
+              break;
+            case 'status':
+              addOutput(`📡 Live mode: ${isLiveMode ? '🔴 ON' : '⚫ OFF'}`, 'info');
+              if (isLiveMode) {
+                addOutput('   Auto-refreshing queue every 1 second');
+              }
+              break;
+            default:
+              addOutput('❌ Invalid live command. Use: on, off, or status', 'error');
+          }
+          break;
+
         case 'whoami':
           addOutput('👤 User: anonymous nerd', 'info');
           addOutput('🎯 Role: jukebox enthusiast');
@@ -287,6 +385,7 @@ export const Terminal: React.FC = () => {
         🎧 NERDY JUKEBOX v1.0 - Terminal Interface 🎮
         <div style={{ fontSize: '12px', fontWeight: 'normal', marginTop: '5px', color: '#666' }}>
           Connected to GraphQL API: http://localhost:4000/
+          {isLiveMode && <span style={{ color: '#ff6b6b', marginLeft: '20px' }}>🔴 LIVE MODE</span>}
         </div>
       </TerminalHeader>
       
