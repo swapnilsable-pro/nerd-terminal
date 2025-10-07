@@ -38,7 +38,7 @@ export const QUEUE_SONG = gql`
 
 // Mutation to upvote a song
 export const UPVOTE_SONG = gql`
-  mutation UpvoteSong($songId: String!) {
+  mutation UpvoteSong($songId: ID!) {
     upvoteSong(songId: $songId) {
       songId
       position
@@ -49,7 +49,7 @@ export const UPVOTE_SONG = gql`
 
 // Mutation to downvote a song
 export const DOWNVOTE_SONG = gql`
-  mutation DownvoteSong($songId: String!) {
+  mutation DownvoteSong($songId: ID!) {
     downvoteSong(songId: $songId) {
       songId
       position
