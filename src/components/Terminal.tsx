@@ -3,6 +3,7 @@ import styled from 'styled-components';
 // Apollo hooks must be imported from the /react entry in this version
 import { useQuery, useMutation, useSubscription } from '@apollo/client/react';
 import { GET_SONGS, GET_QUEUE, QUEUE_SONG, UPVOTE_SONG, DOWNVOTE_SONG, QUEUE_UPDATED_SUBSCRIPTION } from '../graphql/queries';
+import { CONNECTION_STATUS_EVENT } from '../apollo-client';
 import { 
   Song, 
   QueueItem, 
@@ -108,9 +109,24 @@ export const Terminal: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
-  // State for live updates
+  // State for live updates and connection status
   const [isLiveMode, setIsLiveMode] = useState(false);
-  const [lastQueueUpdate, setLastQueueUpdate] = useState<string>('');
+  const [isConnected, setIsConnected] = useState(false);
+
+  // Effect to listen for connection status changes from the Apollo Client
+  useEffect(() => {
+    const handleStatusChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{ isConnected: boolean }>;
+      setIsConnected(customEvent.detail.isConnected);
+    };
+
+    window.addEventListener(CONNECTION_STATUS_EVENT, handleStatusChange);
+
+    // Cleanup listener on component unmount
+    return () => {
+      window.removeEventListener(CONNECTION_STATUS_EVENT, handleStatusChange);
+    };
+  }, []);
 
   // GraphQL hooks
   const { data: songsData, refetch: refetchSongs } = useQuery<GetSongsResponse>(GET_SONGS);
@@ -141,57 +157,64 @@ export const Terminal: React.FC = () => {
   );
 
   const addOutput = (text: string | string[], type?: 'error' | 'success' | 'info') => {
-    setOutput(prev => [...prev, { text: text.toString(), type }]);
+    if (Array.isArray(text)) {
+      const newOutputs = text.map(line => ({ text: line, type }));
+      setOutput(prev => [...prev, ...newOutputs]);
+    } else {
+      setOutput(prev => [...prev, { text: text.toString(), type }]);
+    }
+  };
+
+  const getSongInfo = (songId: string): string => {
+    const song = songsData?.songs?.find((s: Song) => s.id === songId);
+    return song ? `${song.title} - ${song.artist}` : `Song ID: ${songId}`;
   };
 
   const handleCommand = async (command: string) => {
     const trimmedCommand = command.trim();
-    if (!trimmedCommand) return;
+    addOutput(`> ${trimmedCommand}`);
 
-    // Add command to history and output
-    setHistory(prev => [...prev, trimmedCommand]);
-    addOutput(`$ ${trimmedCommand}`);
-
-    const [cmd, ...args] = trimmedCommand.toLowerCase().split(' ');
+    const [cmd, ...args] = trimmedCommand.split(/\s+/);
+    const arg = args.join(' ');
 
     try {
       switch (cmd) {
         case 'help':
-          addOutput('🎮 Available Commands:', 'info');
-          addOutput('  help              - Show this help message');
-          addOutput('  ls songs         - List all available songs');
-          addOutput('  view queue       - Show current queue');
-          addOutput('  queue <id>       - Add song to queue by ID');
-          addOutput('  upvote <id>      - Upvote a song in queue');
-          addOutput('  downvote <id>    - Downvote a song in queue');
-          addOutput('  live on          - Enable live queue updates');
-          addOutput('  live off         - Disable live queue updates');
-          addOutput('  live status      - Show live mode status');
-          addOutput('  clear            - Clear terminal');
-          addOutput('  whoami           - Show current user info');
+          const helpText = [
+            'NERDY JUKEBOX HELP',
+            '------------------',
+            'Available Commands:',
+            '  songs              - List all available songs.',
+            '  queue              - Show the current song queue.',
+            '  queue <songId>     - Add a song to the queue.',
+            '  upvote <songId>    - Upvote a song in the queue.',
+            '  downvote <songId>  - Downvote a song in the queue.',
+            '  live               - Manage real-time updates (on/off/status).',
+            '  clear              - Clear the terminal screen.',
+            '  help               - Display this help message.',
+          ];
+          addOutput(helpText);
           break;
 
-        case 'ls':
-          if (args[0] === 'songs') {
-            await refetchSongs();
-            if (songsData?.songs) {
-              addOutput('🎵 Available Songs:', 'success');
-              addOutput('');
-              songsData.songs.forEach((song: Song, index: number) => {
-                const duration = Math.floor(song.duration / 60) + ':' + (song.duration % 60).toString().padStart(2, '0');
-                addOutput(`[${song.id}] ${song.title} - ${song.artist} (${duration})`);
-              });
-              addOutput(`\nTotal: ${songsData.songs.length} songs available`);
-            } else {
-              addOutput('❌ No songs available', 'error');
-            }
+        case 'songs':
+          // Refetch and display songs
+          await refetchSongs();
+          if (songsData?.songs) {
+            addOutput('🎵 Available Songs:', 'success');
+            addOutput('');
+            songsData.songs.forEach((song: Song, index: number) => {
+              const duration = Math.floor(song.duration / 60) + ':' + (song.duration % 60).toString().padStart(2, '0');
+              addOutput(`[${song.id}] ${song.title} - ${song.artist} (${duration})`);
+            });
+            addOutput(`\nTotal: ${songsData.songs.length} songs available`);
           } else {
-            addOutput('❌ Unknown ls command. Try "ls songs"', 'error');
+            addOutput('❌ No songs available', 'error');
           }
           break;
 
-        case 'view':
-          if (args[0] === 'queue') {
+        case 'queue':
+          if (args.length === 0) {
+            // Show current queue
             await refetchQueue();
             if (queueData?.queue && queueData.queue.length > 0) {
               addOutput('🎛️ Current Queue:', 'success');
@@ -206,111 +229,55 @@ export const Terminal: React.FC = () => {
               addOutput('📭 Queue is empty', 'info');
             }
           } else {
-            addOutput('❌ Unknown view command. Try "view queue"', 'error');
-          }
-          break;
-
-        case 'queue':
-          if (args.length === 0) {
-            addOutput('❌ Please provide a song ID. Usage: queue <id>', 'error');
-            break;
-          }
-          const songId = args[0];
-          try {
-            const result = await queueSongMutation({ variables: { songId } });
-            if (result.data?.queueSong) {
-              const song = songsData?.songs?.find((s: Song) => s.id === songId);
-              const songInfo = song ? `${song.title} - ${song.artist}` : `Song ID: ${songId}`;
-              addOutput(`✅ Added to queue: ${songInfo}`, 'success');
-              addOutput(`   Position: ${result.data.queueSong.position}, Votes: ${result.data.queueSong.votes}`);
-              refetchQueue();
+            // Add song to queue
+            const songId = args[0];
+            try {
+              const result = await queueSongMutation({ variables: { songId } });
+              if (result.data?.queueSong) {
+                const song = songsData?.songs?.find((s: Song) => s.id === songId);
+                const songInfo = song ? `${song.title} - ${song.artist}` : `Song ID: ${songId}`;
+                addOutput(`✅ Added to queue: ${songInfo}`, 'success');
+                addOutput(`   Position: ${result.data.queueSong.position}, Votes: ${result.data.queueSong.votes}`);
+                refetchQueue();
+              }
+            } catch (error) {
+              addOutput(`❌ Error queueing song: ${error}`, 'error');
             }
-          } catch (error) {
-            addOutput(`❌ Error queueing song: ${error}`, 'error');
           }
           break;
 
         case 'upvote':
-          if (args.length === 0) {
-            addOutput('❌ Please provide a song ID. Usage: upvote <id>', 'error');
-            break;
-          }
           try {
-            const result = await upvoteSongMutation({ variables: { songId: args[0] } });
+            const result = await upvoteSongMutation({ variables: { songId: arg } });
             if (result.data?.upvoteSong) {
-              const song = songsData?.songs?.find((s: Song) => s.id === args[0]);
-              const songInfo = song ? `${song.title}` : `Song ID: ${args[0]}`;
+              const songInfo = getSongInfo(result.data.upvoteSong.songId);
               addOutput(`👍 Upvoted: ${songInfo}`, 'success');
-              addOutput(`   Position: ${result.data.upvoteSong.position}, Votes: ${result.data.upvoteSong.votes}`);
-              refetchQueue();
             }
           } catch (error) {
-            addOutput(`❌ Error upvoting song: ${error}`, 'error');
+            addOutput(`Error upvoting song: ${error instanceof Error ? error.message : String(error)}`, 'error');
           }
           break;
 
         case 'downvote':
-          if (args.length === 0) {
-            addOutput('❌ Please provide a song ID. Usage: downvote <id>', 'error');
-            break;
-          }
           try {
-            const result = await downvoteSongMutation({ variables: { songId: args[0] } });
+            const result = await downvoteSongMutation({ variables: { songId: arg } });
             if (result.data?.downvoteSong) {
-              const song = songsData?.songs?.find((s: Song) => s.id === args[0]);
-              const songInfo = song ? `${song.title}` : `Song ID: ${args[0]}`;
+              const songInfo = getSongInfo(result.data.downvoteSong.songId);
               addOutput(`👎 Downvoted: ${songInfo}`, 'success');
-              addOutput(`   Position: ${result.data.downvoteSong.position}, Votes: ${result.data.downvoteSong.votes}`);
-              refetchQueue();
             }
           } catch (error) {
-            addOutput(`❌ Error downvoting song: ${error}`, 'error');
+            addOutput(`Error downvoting song: ${error instanceof Error ? error.message : String(error)}`, 'error');
           }
           break;
 
         case 'clear':
-          setOutput([
-            { text: '🎧 Welcome to Nerdy Jukebox Terminal! 🎮', type: 'success' },
-            { text: 'Type "help" to see available commands.', type: 'info' },
-            { text: '' }
-          ]);
-          break;
-
-        case 'live':
-          if (args.length === 0) {
-            addOutput('❌ Please specify: live on, live off, or live status', 'error');
-            break;
-          }
-          switch (args[0]) {
-            case 'on':
-              setIsLiveMode(true);
-              setLastQueueUpdate(JSON.stringify(queueData?.queue || []));
-              addOutput('🔴 Live mode ON - Queue updates will appear automatically', 'success');
-              addOutput('   Polling every 1 second for real-time updates');
-              break;
-            case 'off':
-              setIsLiveMode(false);
-              addOutput('⚫ Live mode OFF - Manual refresh required', 'info');
-              break;
-            case 'status':
-              addOutput(`📡 Live mode: ${isLiveMode ? '🔴 ON' : '⚫ OFF'}`, 'info');
-              if (isLiveMode) {
-                addOutput('   Auto-refreshing queue every 1 second');
-              }
-              break;
-            default:
-              addOutput('❌ Invalid live command. Use: on, off, or status', 'error');
-          }
-          break;
-
-        case 'whoami':
-          addOutput('👤 User: anonymous nerd', 'info');
-          addOutput('🎯 Role: jukebox enthusiast');
-          addOutput('🚀 Status: ready to rock!');
+          setOutput([]);
           break;
 
         default:
-          addOutput(`❌ Command not found: ${cmd}. Type "help" for available commands.`, 'error');
+          if (trimmedCommand) {
+            addOutput(`❌ Command not found: ${cmd}. Type "help" for available commands.`, 'error');
+          }
       }
     } catch (error) {
       addOutput(`❌ Error executing command: ${error}`, 'error');
@@ -331,7 +298,9 @@ export const Terminal: React.FC = () => {
       <TerminalHeader>
         🎧 NERDY JUKEBOX v1.0 - Terminal Interface 🎮
         <div style={{ fontSize: '12px', fontWeight: 'normal', marginTop: '5px', color: '#666' }}>
-          Connected to GraphQL API: http://localhost:4000/
+          <span>
+            API Status: <span style={{ color: isConnected ? '#51cf66' : '#ff6b6b' }}>● {isConnected ? 'Connected' : 'Disconnected'}</span>
+          </span>
           {isLiveMode && <span style={{ color: '#ff6b6b', marginLeft: '20px' }}>🔴 LIVE MODE</span>}
         </div>
       </TerminalHeader>
