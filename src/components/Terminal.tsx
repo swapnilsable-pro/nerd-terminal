@@ -114,87 +114,34 @@ export const Terminal: React.FC = () => {
 
   // GraphQL hooks
   const { data: songsData, refetch: refetchSongs } = useQuery<GetSongsResponse>(GET_SONGS);
-  const { data: queueData, refetch: refetchQueue } = useQuery<GetQueueResponse>(GET_QUEUE, {
-    pollInterval: isLiveMode ? 1000 : 0, // Poll every second when live mode is on
-  });
+  const { data: queueData, refetch: refetchQueue } = useQuery<GetQueueResponse>(GET_QUEUE);
   const [queueSongMutation] = useMutation<QueueSongResponse, QueueSongVariables>(QUEUE_SONG);
   const [upvoteSongMutation] = useMutation<UpvoteSongResponse, UpvoteSongVariables>(UPVOTE_SONG);
   const [downvoteSongMutation] = useMutation<DownvoteSongResponse, DownvoteSongVariables>(DOWNVOTE_SONG);
 
-  // Real-time subscription for queue updates
-  const { data: subscriptionData, loading: subLoading, error: subError } = useSubscription<QueueUpdatedSubscription>(
+  useSubscription<QueueUpdatedSubscription>(
     QUEUE_UPDATED_SUBSCRIPTION,
     {
-      onError: (error: Error) => {
-        console.error('❌ Subscription error:', error);
+      onData: ({ data }) => {
+        const event = data.data?.queueUpdated;
+        if (event) {
+          console.log('📥 Subscription data received:', event);
+          // Create a more descriptive message based on the event type
+          const message = `🔔 Real-time update: ${event.type} (Song ID: ${event.songId})`;
+          addOutput(message);
+          // Refetch the queue to update the UI with the latest state
+          refetchQueue();
+        }
       },
-      onData: (options) => {
-        // options has shape { client, data, error, loading, ... }
-        console.log('📥 Subscription data received:', options.data);
-      }
+      onError: (error) => {
+        console.error('❌ Subscription error:', error);
+        addOutput(`Error: Could not connect to real-time service. ${error.message}`, 'error');
+      },
     }
   );
 
-  // Add debug logging
-  useEffect(() => {
-    console.log('🔍 Subscription status:', { 
-      loading: subLoading, 
-      error: subError?.message, 
-      data: subscriptionData 
-    });
-  }, [subLoading, subError, subscriptionData]);
-
-  // Handle subscription data changes  
-  useEffect(() => {
-    if (subscriptionData?.queueUpdated) {
-      console.log('🔔 SUBSCRIPTION RECEIVED:', subscriptionData.queueUpdated);
-      
-      const event = subscriptionData.queueUpdated;
-      addOutput(`🔔 Real-time update: ${event.type}`, 'info');
-      addOutput(`   Song: ${event.songId || 'unknown'}, User: ${event.user || 'anonymous'}`);
-      addOutput(`   Time: ${new Date(event.timestamp).toLocaleTimeString()}`);
-      addOutput('');
-      
-      refetchQueue();
-    }
-  }, [subscriptionData]);
-
-  // Auto-scroll to bottom when new output is added
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [output]);
-
-  // Focus input on mount
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  // Handle live queue updates
-  useEffect(() => {
-    if (queueData && isLiveMode) {
-      const currentQueueString = JSON.stringify(queueData.queue);
-      if (lastQueueUpdate && lastQueueUpdate !== currentQueueString) {
-        addOutput('🔄 Queue updated!', 'info');
-        // Show the updated queue
-        if (queueData.queue.length > 0) {
-          queueData.queue.forEach((item: QueueItem, index: number) => {
-            const song = songsData?.songs?.find((s: Song) => s.id === item.songId);
-            const songInfo = song ? `${song.title} - ${song.artist}` : `Song ID: ${item.songId}`;
-            addOutput(`  ${item.position}. ${songInfo} (${item.votes} votes)`);
-          });
-        } else {
-          addOutput('  📭 Queue is now empty');
-        }
-        addOutput('');
-      }
-      setLastQueueUpdate(currentQueueString);
-    }
-  }, [queueData, isLiveMode, lastQueueUpdate, songsData]);
-
-  const addOutput = (text: string, type?: 'error' | 'success' | 'info') => {
-    setOutput(prev => [...prev, { text, type }]);
+  const addOutput = (text: string | string[], type?: 'error' | 'success' | 'info') => {
+    setOutput(prev => [...prev, { text: text.toString(), type }]);
   };
 
   const handleCommand = async (command: string) => {

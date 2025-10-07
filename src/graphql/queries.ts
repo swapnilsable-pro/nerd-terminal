@@ -66,12 +66,6 @@ export const QUEUE_UPDATED_SUBSCRIPTION = gql`
       songId
       user
       timestamp
-      queue {
-        songId
-        position
-        votes
-        queuedAt
-      }
     }
   }
 `;
