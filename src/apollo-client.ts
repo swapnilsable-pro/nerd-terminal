@@ -6,12 +6,20 @@ import { getMainDefinition } from '@apollo/client/utilities';
 // Create a custom event name to broadcast connection status changes
 export const CONNECTION_STATUS_EVENT = 'connectionStatusChange';
 
+const mixerHttpUrl =
+  process.env.REACT_APP_MIXER_HTTP_URL ??
+  `${window.location.protocol}//${window.location.hostname}:4000/graphql`;
+
+const mixerWsUrl =
+  process.env.REACT_APP_MIXER_WS_URL ??
+  `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:4000/graphql`;
+
 const httpLink = new HttpLink({
-  uri: 'http://localhost:4000/graphql'
+  uri: mixerHttpUrl
 });
 
 const wsLink = new GraphQLWsLink(createClient({
-  url: 'ws://localhost:4000/graphql',
+  url: mixerWsUrl,
   on: {
     connected: () => {
       console.log('✅ WS connected (graphql-ws)');
